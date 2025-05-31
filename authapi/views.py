@@ -8,6 +8,7 @@ from django.conf import settings
 from rest_framework import generics, permissions, status, views
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework_simplejwt.tokens import RefreshToken
 from .models import User
 from .serializers import RegisterSerializer, UserSerializer, ProfileUpdateSerializer
@@ -87,9 +88,18 @@ class InvestigatorOnlyView(APIView):
 class ProfileUpdateView(generics.UpdateAPIView):
     serializer_class = ProfileUpdateSerializer
     permission_classes = [permissions.IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]  # Support file uploads
 
     def get_object(self):
         return self.request.user
+
+    def put(self, request, *args, **kwargs):
+        """Handle PUT requests for profile updates including profile picture"""
+        return super().put(request, *args, **kwargs)
+
+    def patch(self, request, *args, **kwargs):
+        """Handle PATCH requests for partial profile updates including profile picture"""
+        return super().patch(request, *args, **kwargs)
 
 
 class ForgotPasswordView(APIView):

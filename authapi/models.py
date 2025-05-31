@@ -8,7 +8,18 @@ class User(AbstractUser):
         ('Investigator', 'Investigator'),
     )
     role = models.CharField(max_length=20, choices=ROLE_CHOICES)
+    profile_picture = models.ImageField(
+        upload_to='profile_pictures/', 
+        blank=True, 
+        null=True,
+        help_text="Upload a profile picture"
+    )
 
     def __str__(self):
         return f"{self.username} ({self.role})"
 
+    def get_profile_picture_url(self):
+        """Return the URL of the profile picture or None if not set"""
+        if self.profile_picture:
+            return self.profile_picture.url
+        return None
