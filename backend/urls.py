@@ -22,5 +22,7 @@ from django.conf.urls.static import static
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/auth/', include('authapi.urls')),
+    # path('api/crime-ai/', include('crime_ai.urls')),
+    path('api/', include('PredictCrimeSeverity.urls')),
     path('api/', include('incidents.urls')),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
