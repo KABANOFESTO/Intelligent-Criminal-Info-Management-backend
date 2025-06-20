@@ -45,6 +45,9 @@ INSTALLED_APPS = [
     'authapi',
     'incidents',
     'PredictCrimeSeverity',
+    'suspect',
+    'case',
+    'communication',
     'corsheaders',
 ]
 

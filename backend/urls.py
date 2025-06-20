@@ -25,4 +25,7 @@ urlpatterns = [
     # path('api/crime-ai/', include('crime_ai.urls')),
     path('api/', include('PredictCrimeSeverity.urls')),
     path('api/', include('incidents.urls')),
+    path('api/', include('suspect.urls')),
+    path('api/', include('communication.urls')),
+    path('api/', include('case.urls')),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
