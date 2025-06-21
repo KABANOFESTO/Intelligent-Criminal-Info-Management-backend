@@ -36,13 +36,8 @@ class MyTokenObtainView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Try to get user by email first
-        try:
-            user = User.objects.get(email=email)
-            # Authenticate using the username but we got user by email
-            user = authenticate(username=user.username, password=password)
-        except User.DoesNotExist:
-            user = None
+        # Authenticate using email as username since USERNAME_FIELD is now email
+        user = authenticate(username=email, password=password)
         
         if user:
             if user.is_active:

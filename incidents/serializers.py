@@ -13,9 +13,23 @@ class IncidentSerializer(serializers.ModelSerializer):
         crime_type = validated_data.get("crime_type")
         location = validated_data.get("location")
 
-        # Default Rwanda coordinates (can be improved with frontend geolocation)
-        latitude = -1.95
-        longitude = 30.05
+        # Get latitude and longitude from validated_data
+        # Use provided coordinates or fall back to default Rwanda coordinates
+        latitude = validated_data.get("latitude")
+        longitude = validated_data.get("longitude")
+        
+        # If coordinates are not provided, use default Rwanda coordinates
+        if latitude is None or longitude is None:
+            latitude = -1.95
+            longitude = 30.05
+            print("⚠️ Using default Rwanda coordinates. Consider implementing frontend geolocation.")
+        
+        # Only add latitude/longitude to validated_data if they exist as model fields
+        # This prevents the TypeError when creating the incident
+        if hasattr(Incident, 'latitude'):
+            validated_data['latitude'] = latitude
+        if hasattr(Incident, 'longitude'):
+            validated_data['longitude'] = longitude
 
         # Paths
         model_path = os.path.join('ml', 'crime_severity_model.pkl')
@@ -38,10 +52,12 @@ class IncidentSerializer(serializers.ModelSerializer):
             crime_encoded = crime_encoder.transform([crime_type])[0]
             location_encoded = location_encoder.transform([location])[0]
 
-            # Build feature vector
+            # Build feature vector using actual coordinates
             features = np.array([[crime_encoded, latitude, longitude, location_encoded]])
             prediction = model.predict(features)[0]
             validated_data['predicted_severity'] = bool(prediction)
+
+            print(f"✅ Prediction made using coordinates: ({latitude}, {longitude})")
 
         except Exception as e:
             # Log or raise depending on desired behavior
