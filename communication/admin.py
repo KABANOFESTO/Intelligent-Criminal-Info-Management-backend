@@ -1,12 +1,13 @@
 from django.contrib import admin
-from .models import CommunicationLog, Case
+from .models import CommunicationLog
+from case.models import Case
 
 @admin.register(Case)
 class CaseAdmin(admin.ModelAdmin):
-    list_display = ['case_id', 'title', 'status', 'created_at', 'updated_at']
-    list_filter = ['status', 'created_at']
+    list_display = ['case_id', 'title', 'status']
+    list_filter = ['status']
     search_fields = ['case_id', 'title', 'description']
-    readonly_fields = ['created_at', 'updated_at']
+    readonly_fields = []
 
 
 @admin.register(CommunicationLog)

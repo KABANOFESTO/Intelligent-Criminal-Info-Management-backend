@@ -1,24 +1,7 @@
 from django.db import models
 from django.conf import settings
 from django.core.validators import MinLengthValidator
-
-class Case(models.Model):
-    """Case model for related_case foreign key"""
-    case_id = models.CharField(max_length=20, unique=True)
-    title = models.CharField(max_length=200)
-    description = models.TextField()
-    status = models.CharField(max_length=20, choices=[
-        ('open', 'Open'),
-        ('in_progress', 'In Progress'),
-        ('closed', 'Closed'),
-        ('archived', 'Archived')
-    ], default='open')
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-    
-    def __str__(self):
-        return f"{self.case_id} - {self.title}"
-
+from case.models import Case
 
 class CommunicationLog(models.Model):
     MESSAGE_PRIORITY_CHOICES = [
@@ -52,9 +35,9 @@ class CommunicationLog(models.Model):
     )
     timestamp = models.DateTimeField(auto_now_add=True)
     related_case = models.ForeignKey(
-        'Case', 
-        on_delete=models.SET_NULL, 
-        null=True, 
+        Case,
+        on_delete=models.SET_NULL,
+        null=True,
         blank=True,
         related_name='communications'
     )

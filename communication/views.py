@@ -2,7 +2,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from django.db.models import Q, Count, Max, Case as DjangoCase, When, Value, IntegerField
+from django.db.models import Q, Count, Case as DjangoCase, When, Value, IntegerField
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from .models import CommunicationLog, Case
@@ -37,22 +37,25 @@ class CommunicationLogViewSet(viewsets.ModelViewSet):
             Q(sender=user) | Q(receiver=user)
         )
         
-        # Filter by conversation partner
+        # Filter by conversation partner with proper type validation
         with_user = self.request.query_params.get('with_user')
         if with_user:
             try:
-                partner = User.objects.get(id=with_user)
+                partner = User.objects.get(id=int(with_user))
                 queryset = queryset.filter(
                     (Q(sender=user) & Q(receiver=partner)) |
                     (Q(sender=partner) & Q(receiver=user))
                 )
-            except User.DoesNotExist:
-                queryset = queryset.none()
+            except (User.DoesNotExist, ValueError, TypeError):
+                return CommunicationLog.objects.none()
         
-        # Filter by case
+        # Filter by case with proper type validation
         case_id = self.request.query_params.get('case')
         if case_id:
-            queryset = queryset.filter(related_case_id=case_id)
+            try:
+                queryset = queryset.filter(related_case_id=int(case_id))
+            except ValueError:
+                return CommunicationLog.objects.none()
         
         # Filter by message type
         message_type = self.request.query_params.get('message_type')
@@ -182,7 +185,7 @@ class CommunicationLogViewSet(viewsets.ModelViewSet):
             last_message = CommunicationLog.objects.filter(
                 (Q(sender=user) & Q(receiver=partner)) |
                 (Q(sender=partner) & Q(receiver=user))
-            ).first()
+            ).order_by('-timestamp').first()
             
             # Count unread messages from this partner
             unread_count = CommunicationLog.objects.filter(
