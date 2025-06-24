@@ -11,7 +11,7 @@ from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework_simplejwt.tokens import RefreshToken
 from .models import User
-from .serializers import RegisterSerializer, UserSerializer, ProfileUpdateSerializer
+from .serializers import RegisterSerializer, UserSerializer, ProfileUpdateSerializer,AdminUserCreateSerializer
 from .permissions import IsAdmin, IsPolice, IsInvestigator
 import logging
 
@@ -21,6 +21,56 @@ logger = logging.getLogger(__name__)
 class RegisterView(generics.CreateAPIView):
     serializer_class = RegisterSerializer
     permission_classes = [permissions.AllowAny]
+
+class AdminUserCreateView(generics.CreateAPIView):
+    serializer_class = AdminUserCreateSerializer
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+    
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+        
+        # Send email with credentials
+        try:
+            frontend_login_url = getattr(settings, 'FRONTEND_LOGIN_URL', 'http://localhost:3000/login')
+            
+            send_mail(
+                subject="Your Account Has Been Created",
+                message=f"Hello {user.username},\n\n"
+                       f"An administrator has created an account for you with the following details:\n\n"
+                       f"Username: {user.username}\n"
+                       f"Email: {user.email}\n"
+                       f"Temporary Password: {user.temporary_password}\n"
+                       f"Role: {user.get_role_display()}\n\n"
+                       f"Please log in at {frontend_login_url} and change your password immediately.\n\n"
+                       f"If you didn't expect this email, please contact your system administrator.",
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[user.email],
+                fail_silently=False,
+            )
+            logger.info(f"User creation email sent to {user.email}")
+            
+        except Exception as e:
+            logger.error(f"Failed to send user creation email to {user.email}: {str(e)}")
+            # Return response but indicate email wasn't sent
+            headers = self.get_success_headers(serializer.data)
+            return Response(
+                {
+                    "message": "User created successfully but failed to send email.",
+                    "user_id": user.id,
+                    "email": user.email
+                },
+                status=status.HTTP_201_CREATED,
+                headers=headers
+            )
+            
+        headers = self.get_success_headers(serializer.data)
+        return Response(
+            {"message": "User created successfully. Email with credentials sent."},
+            status=status.HTTP_201_CREATED,
+            headers=headers
+        )
 
 
 class MyTokenObtainView(APIView):
@@ -83,7 +133,7 @@ class InvestigatorOnlyView(APIView):
 class ProfileUpdateView(generics.UpdateAPIView):
     serializer_class = ProfileUpdateSerializer
     permission_classes = [permissions.IsAuthenticated]
-    parser_classes = [MultiPartParser, FormParser, JSONParser]  # Support file uploads
+    parser_classes = [MultiPartParser, FormParser, JSONParser]  
 
     def get_object(self):
         return self.request.user
@@ -237,6 +287,208 @@ class UserDetailView(generics.RetrieveUpdateDestroyAPIView):
     queryset = User.objects.all()
     serializer_class = UserSerializer
     permission_classes = [permissions.IsAuthenticated, IsAdmin]
+
+    def update(self, request, *args, **kwargs):
+        """Handle user updates with proper logging"""
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        
+        # Log the update attempt
+        logger.info(f"Admin {request.user.email} attempting to update user {instance.email}")
+        
+        # Prevent admin from updating their own account through this endpoint
+        if instance == request.user:
+            return Response(
+                {"error": "Cannot update your own account through this endpoint. Use profile update instead."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        
+        # Store original data for logging
+        original_data = {
+            'email': instance.email,
+            'role': instance.role,
+            'is_active': instance.is_active
+        }
+        
+        self.perform_update(serializer)
+        
+        # Log what was changed
+        updated_user = serializer.instance
+        changes = []
+        if original_data['email'] != updated_user.email:
+            changes.append(f"email: {original_data['email']} -> {updated_user.email}")
+        if original_data['role'] != updated_user.role:
+            changes.append(f"role: {original_data['role']} -> {updated_user.role}")
+        if original_data['is_active'] != updated_user.is_active:
+            changes.append(f"is_active: {original_data['is_active']} -> {updated_user.is_active}")
+        
+        if changes:
+            logger.info(f"User {updated_user.email} updated by admin {request.user.email}. Changes: {', '.join(changes)}")
+        
+        return Response(serializer.data)
+
+    def destroy(self, request, *args, **kwargs):
+        """Handle user deletion with proper logging and safeguards"""
+        instance = self.get_object()
+        
+        # Prevent admin from deleting their own account
+        if instance == request.user:
+            return Response(
+                {"error": "Cannot delete your own account."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Log the deletion attempt
+        logger.warning(f"Admin {request.user.email} is deleting user {instance.email} (ID: {instance.id})")
+        
+        # Store user info before deletion for logging
+        deleted_user_email = instance.email
+        deleted_user_id = instance.id
+        
+        self.perform_destroy(instance)
+        
+        logger.warning(f"User {deleted_user_email} (ID: {deleted_user_id}) successfully deleted by admin {request.user.email}")
+        
+        return Response(
+            {"message": f"User {deleted_user_email} has been successfully deleted."}, 
+            status=status.HTTP_204_NO_CONTENT
+        )
+
+
+class AdminUserUpdateView(generics.UpdateAPIView):
+    """Dedicated view for admin user updates"""
+    queryset = User.objects.all()
+    serializer_class = UserSerializer
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+    
+    def update(self, request, *args, **kwargs):
+        """Handle user updates with validation and logging"""
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        
+        # Prevent admin from updating their own account through admin endpoints
+        if instance == request.user:
+            return Response(
+                {"error": "Cannot update your own account through admin endpoints. Use profile update instead."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Log the update attempt
+        logger.info(f"Admin {request.user.email} updating user {instance.email}")
+        
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        
+        self.perform_update(serializer)
+        
+        logger.info(f"User {instance.email} successfully updated by admin {request.user.email}")
+        
+        return Response({
+            "message": "User updated successfully.",
+            "user": serializer.data
+        })
+
+
+class AdminUserDeleteView(generics.DestroyAPIView):
+    """Dedicated view for admin user deletion"""
+    queryset = User.objects.all()
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+    
+    def destroy(self, request, *args, **kwargs):
+        """Handle user deletion with proper safeguards"""
+        instance = self.get_object()
+        
+        # Prevent admin from deleting their own account
+        if instance == request.user:
+            return Response(
+                {"error": "Cannot delete your own account."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Check if this is the last admin (optional safeguard)
+        if instance.role == 'admin':
+            admin_count = User.objects.filter(role='admin', is_active=True).count()
+            if admin_count <= 1:
+                return Response(
+                    {"error": "Cannot delete the last active admin account."}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        # Log the deletion
+        logger.warning(f"Admin {request.user.email} is deleting user {instance.email} (ID: {instance.id})")
+        
+        deleted_user_email = instance.email
+        self.perform_destroy(instance)
+        
+        logger.warning(f"User {deleted_user_email} successfully deleted by admin {request.user.email}")
+        
+        return Response(
+            {"message": f"User {deleted_user_email} has been successfully deleted."}, 
+            status=status.HTTP_200_OK
+        )
+
+
+
+class UserActivateDeactivateView(APIView):
+    """Admin view to activate/deactivate users"""
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+    
+    def patch(self, request, pk):
+        """Toggle user active status"""
+        try:
+            user = User.objects.get(pk=pk)
+        except User.DoesNotExist:
+            return Response(
+                {"error": "User not found."}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Log initial state
+        logger.info(f"Before toggle - User {user.email} status: {user.status}, is_active: {user.is_active}")
+        
+        # Prevent admin from deactivating their own account
+        if user == request.user:
+            return Response(
+                {"error": "Cannot deactivate your own account."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Check if this is the last admin being deactivated
+        if user.role == 'Admin' and user.status == 'Active':
+            active_admin_count = User.objects.filter(role='Admin', status='Active').count()
+            if active_admin_count <= 1:
+                return Response(
+                    {"error": "Cannot deactivate the last active admin account."}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        # Store original status for logging
+        original_status = user.status
+        
+        # Use the model methods to toggle status (this keeps both fields in sync)
+        if user.status == 'Active':
+            user.deactivate()
+            action = "deactivated"
+        else:
+            user.activate()
+            action = "activated"
+        
+        # Refresh from database to get updated values
+        user.refresh_from_db()
+        
+        # Log the change
+        logger.info(f"User {user.email} {action} by admin {request.user.email}")
+        logger.info(f"After toggle - User {user.email} status: {user.status}, is_active: {user.is_active}")
+        
+        return Response({
+            "message": f"User {user.email} has been {action}.",
+            "user": UserSerializer(user).data,
+            "previous_status": original_status,
+            "new_status": user.status
+        })
 
 
 class CurrentUserView(APIView):
