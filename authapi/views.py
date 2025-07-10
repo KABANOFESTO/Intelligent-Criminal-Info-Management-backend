@@ -12,7 +12,7 @@ from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework_simplejwt.tokens import RefreshToken
 from .models import User
 from .serializers import RegisterSerializer, UserSerializer, ProfileUpdateSerializer,AdminUserCreateSerializer
-from .permissions import IsAdmin, IsPolice, IsInvestigator
+from .permissions import IsAdmin, IsAdminOrInvestigator, IsPolice, IsInvestigator
 import logging
 
 logger = logging.getLogger(__name__)
@@ -31,7 +31,6 @@ class AdminUserCreateView(generics.CreateAPIView):
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
         
-        # Send email with credentials
         try:
             frontend_login_url = getattr(settings, 'FRONTEND_LOGIN_URL', 'http://localhost:3000/login')
             
@@ -53,7 +52,7 @@ class AdminUserCreateView(generics.CreateAPIView):
             
         except Exception as e:
             logger.error(f"Failed to send user creation email to {user.email}: {str(e)}")
-            # Return response but indicate email wasn't sent
+           
             headers = self.get_success_headers(serializer.data)
             return Response(
                 {
@@ -86,7 +85,6 @@ class MyTokenObtainView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Authenticate using email as username since USERNAME_FIELD is now email
         user = authenticate(username=email, password=password)
         
         if user:
@@ -163,15 +161,13 @@ class ForgotPasswordView(APIView):
         try:
             user = User.objects.get(email=email)
             
-            # Generate UID and token
             uid = urlsafe_base64_encode(force_bytes(user.pk))
             token = default_token_generator.make_token(user)
             
-            # Use settings for frontend URL
+
             frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:3000')
             reset_link = f"{frontend_url}/reset-password/{uid}/{token}"
             
-            # Send email with proper error handling
             try:
                 send_mail(
                     subject="Password Reset Request",
@@ -279,14 +275,14 @@ class UserListView(generics.ListAPIView):
     """Admin view to list all users"""
     queryset = User.objects.all()
     serializer_class = UserSerializer
-    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+    permission_classes = [IsAdminOrInvestigator]
 
 
 class UserDetailView(generics.RetrieveUpdateDestroyAPIView):
     """Admin view to get, update, or delete a specific user"""
     queryset = User.objects.all()
     serializer_class = UserSerializer
-    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+    permission_classes = [IsAdminOrInvestigator]
 
     def update(self, request, *args, **kwargs):
         """Handle user updates with proper logging"""
@@ -369,14 +365,14 @@ class AdminUserUpdateView(generics.UpdateAPIView):
         partial = kwargs.pop('partial', False)
         instance = self.get_object()
         
-        # Prevent admin from updating their own account through admin endpoints
+       
         if instance == request.user:
             return Response(
                 {"error": "Cannot update your own account through admin endpoints. Use profile update instead."}, 
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Log the update attempt
+       
         logger.info(f"Admin {request.user.email} updating user {instance.email}")
         
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
@@ -401,14 +397,13 @@ class AdminUserDeleteView(generics.DestroyAPIView):
         """Handle user deletion with proper safeguards"""
         instance = self.get_object()
         
-        # Prevent admin from deleting their own account
+     
         if instance == request.user:
             return Response(
                 {"error": "Cannot delete your own account."}, 
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Check if this is the last admin (optional safeguard)
         if instance.role == 'admin':
             admin_count = User.objects.filter(role='admin', is_active=True).count()
             if admin_count <= 1:
@@ -417,7 +412,6 @@ class AdminUserDeleteView(generics.DestroyAPIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
         
-        # Log the deletion
         logger.warning(f"Admin {request.user.email} is deleting user {instance.email} (ID: {instance.id})")
         
         deleted_user_email = instance.email
@@ -446,17 +440,15 @@ class UserActivateDeactivateView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
         
-        # Log initial state
+   
         logger.info(f"Before toggle - User {user.email} status: {user.status}, is_active: {user.is_active}")
         
-        # Prevent admin from deactivating their own account
         if user == request.user:
             return Response(
                 {"error": "Cannot deactivate your own account."}, 
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Check if this is the last admin being deactivated
         if user.role == 'Admin' and user.status == 'Active':
             active_admin_count = User.objects.filter(role='Admin', status='Active').count()
             if active_admin_count <= 1:
@@ -465,10 +457,9 @@ class UserActivateDeactivateView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
         
-        # Store original status for logging
+     
         original_status = user.status
         
-        # Use the model methods to toggle status (this keeps both fields in sync)
         if user.status == 'Active':
             user.deactivate()
             action = "deactivated"
@@ -476,10 +467,8 @@ class UserActivateDeactivateView(APIView):
             user.activate()
             action = "activated"
         
-        # Refresh from database to get updated values
         user.refresh_from_db()
         
-        # Log the change
         logger.info(f"User {user.email} {action} by admin {request.user.email}")
         logger.info(f"After toggle - User {user.email} status: {user.status}, is_active: {user.is_active}")
         

@@ -11,3 +11,9 @@ class IsPolice(permissions.BasePermission):
 class IsInvestigator(permissions.BasePermission):
     def has_permission(self, request, view):
         return request.user.is_authenticated and request.user.role == 'Investigator'
+
+class IsAdminOrInvestigator(permissions.BasePermission):
+    def has_permission(self, request, view):
+        is_admin = IsAdmin().has_permission(request, view)
+        is_investigator = IsInvestigator().has_permission(request, view)
+        return is_admin or is_investigator

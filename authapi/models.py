@@ -4,9 +4,9 @@ import secrets
 import string
 
 class User(AbstractUser):
-    # Override username field to remove unique constraint
+
     username = models.CharField(max_length=150, unique=False)
-    # Explicitly set email as unique for authentication
+
     email = models.EmailField(unique=True)
     
     ROLE_CHOICES = (
@@ -22,7 +22,6 @@ class User(AbstractUser):
     )
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='Active')
     
-    # Use email for authentication instead of username
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['username']
     profile_picture = models.ImageField(

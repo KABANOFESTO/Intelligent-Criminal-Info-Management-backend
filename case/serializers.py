@@ -24,14 +24,12 @@ class CaseSerializer(serializers.ModelSerializer):
     
     assigned_officers_ids = serializers.PrimaryKeyRelatedField(
         many=True,
-        write_only=True,
         queryset=User.objects.all(),
         source='assigned_officers',
         required=False
     )
     related_incidents_ids = serializers.PrimaryKeyRelatedField(
         many=True,
-        write_only=True,
         queryset=Incident.objects.all(),
         source='related_incidents',
         required=False
@@ -155,12 +153,26 @@ class CaseSerializer(serializers.ModelSerializer):
 class CaseListSerializer(serializers.ModelSerializer):
     assigned_officers_count = serializers.SerializerMethodField()
     days_open = serializers.SerializerMethodField()
+    
+    assigned_officers_ids = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=User.objects.all(),
+        source='assigned_officers',
+        required=False
+    )
+    related_incidents_ids = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=Incident.objects.all(),
+        source='related_incidents',
+        required=False
+    )
 
     class Meta:
         model = Case
         fields = [
             'id', 'title', 'case_id', 'status', 'priority',
-            'start_date', 'end_date', 'assigned_officers_count', 'days_open'
+            'start_date', 'end_date', 'assigned_officers_count', 'days_open',
+            'assigned_officers_ids', 'related_incidents_ids'
         ]
 
     def get_assigned_officers_count(self, obj):
