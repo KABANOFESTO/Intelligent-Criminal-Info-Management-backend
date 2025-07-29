@@ -17,3 +17,10 @@ class IsAdminOrInvestigator(permissions.BasePermission):
         is_admin = IsAdmin().has_permission(request, view)
         is_investigator = IsInvestigator().has_permission(request, view)
         return is_admin or is_investigator
+
+class IsAdminOrInvestigatorOrPolice(permissions.BasePermission):
+    def has_permission(self, request, view):
+        is_admin = IsAdmin().has_permission(request, view)
+        is_investigator = IsInvestigator().has_permission(request, view)
+        is_police = IsPolice().has_permission(request, view)
+        return is_admin or is_investigator or is_police

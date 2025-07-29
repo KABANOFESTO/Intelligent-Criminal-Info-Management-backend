@@ -1,5 +1,3 @@
-# ml/train_crime_model_extended.py
-
 import pandas as pd
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
@@ -10,35 +8,28 @@ from imblearn.over_sampling import SMOTE
 import joblib
 import os
 
-# Load incident dataset
 df = pd.read_csv("ml/icimps_crime_incidents.csv")
 
-# Drop rows missing essential fields
 df.dropna(subset=[
     'crime_type', 'Latitude', 'Longitude', 
     'is_severe', 'region_code', 'location_type'
 ], inplace=True)
 
-# Show class distribution before resampling
 print("\n📊 Original class distribution (before SMOTE):")
 print(df['is_severe'].value_counts())
 
-# Encode categorical fields
 le_crime = LabelEncoder()
 df['crime_type_encoded'] = le_crime.fit_transform(df['crime_type'])
 
 le_location = LabelEncoder()
 df['location_type_encoded'] = le_location.fit_transform(df['location_type'])
 
-# Prepare features and target
 X = df[['crime_type_encoded', 'Latitude', 'Longitude', 'location_type_encoded']]
 y = df['is_severe']
 
-# Apply SMOTE to handle class imbalance
 sm = SMOTE(random_state=42)
 X_resampled, y_resampled = sm.fit_resample(X, y)
 
-# Show class distribution after resampling
 print("\n✅ Resampled class distribution (after SMOTE):")
 unique, counts = np.unique(y_resampled, return_counts=True)
 print(dict(zip(unique, counts)))

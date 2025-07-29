@@ -12,7 +12,7 @@ from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework_simplejwt.tokens import RefreshToken
 from .models import User
 from .serializers import RegisterSerializer, UserSerializer, ProfileUpdateSerializer,AdminUserCreateSerializer
-from .permissions import IsAdmin, IsAdminOrInvestigator, IsPolice, IsInvestigator
+from .permissions import IsAdmin, IsAdminOrInvestigator, IsAdminOrInvestigatorOrPolice, IsPolice, IsInvestigator
 import logging
 
 logger = logging.getLogger(__name__)
@@ -151,7 +151,6 @@ class ForgotPasswordView(APIView):
     def post(self, request):
         email = request.data.get("email")
         
-        # Validate email presence
         if not email:
             return Response(
                 {"error": "Email is required."}, 
@@ -195,7 +194,7 @@ class ForgotPasswordView(APIView):
             )
             
         except User.DoesNotExist:
-            # Don't reveal if user exists or not for security
+           
             logger.warning(f"Password reset attempted for non-existent email: {email}")
             return Response(
                 {"message": "If an account with this email exists, a password reset link has been sent."}, 
@@ -275,7 +274,7 @@ class UserListView(generics.ListAPIView):
     """Admin view to list all users"""
     queryset = User.objects.all()
     serializer_class = UserSerializer
-    permission_classes = [IsAdminOrInvestigator]
+    permission_classes = [IsAdminOrInvestigatorOrPolice]
 
 
 class UserDetailView(generics.RetrieveUpdateDestroyAPIView):
