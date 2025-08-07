@@ -48,7 +48,9 @@ INSTALLED_APPS = [
     'suspect',
     'case',
     'communication',
+    'AuditLog',
     'corsheaders',
+    
 ]
 
 REST_FRAMEWORK = {

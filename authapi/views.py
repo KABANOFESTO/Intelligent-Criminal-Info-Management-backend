@@ -11,8 +11,9 @@ from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework_simplejwt.tokens import RefreshToken
 from .models import User
-from .serializers import RegisterSerializer, UserSerializer, ProfileUpdateSerializer,AdminUserCreateSerializer
+from .serializers import RegisterSerializer, UserSerializer, ProfileUpdateSerializer, AdminUserCreateSerializer
 from .permissions import IsAdmin, IsAdminOrInvestigator, IsAdminOrInvestigatorOrPolice, IsPolice, IsInvestigator
+from AuditLog.audit_log_utils import log_action 
 import logging
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,17 @@ class RegisterView(generics.CreateAPIView):
     serializer_class = RegisterSerializer
     permission_classes = [permissions.AllowAny]
 
+    def perform_create(self, serializer):
+        user = serializer.save()
+        log_action(
+            self.request,
+            'USER_CREATE',
+            target_user=user,
+            additional_data={'registration_method': 'self_registration'}
+        )
+        logger.info(f"New user self-registered: {user.email}")
+
+
 class AdminUserCreateView(generics.CreateAPIView):
     serializer_class = AdminUserCreateSerializer
     permission_classes = [permissions.IsAuthenticated, IsAdmin]
@@ -30,6 +42,19 @@ class AdminUserCreateView(generics.CreateAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
+        
+        # Log user creation by admin
+        log_action(
+            request,
+            'USER_CREATE',
+            target_user=user,
+            additional_data={
+                'registration_method': 'admin_created',
+                'created_by': request.user.email,
+                'role': user.role,
+                'temporary_password_sent': True
+            }
+        )
         
         try:
             frontend_login_url = getattr(settings, 'FRONTEND_LOGIN_URL', 'http://localhost:3000/login')
@@ -52,6 +77,17 @@ class AdminUserCreateView(generics.CreateAPIView):
             
         except Exception as e:
             logger.error(f"Failed to send user creation email to {user.email}: {str(e)}")
+            
+            # Log email failure
+            log_action(
+                request,
+                'EMAIL_SEND_FAILURE',
+                target_user=user,
+                additional_data={
+                    'email_type': 'user_creation',
+                    'error': str(e)
+                }
+            )
            
             headers = self.get_success_headers(serializer.data)
             return Response(
@@ -90,17 +126,43 @@ class MyTokenObtainView(APIView):
         if user:
             if user.is_active:
                 refresh = RefreshToken.for_user(user)
+                
+                # Log successful login
+                log_action(
+                    request,
+                    'LOGIN',
+                    target_user=user,
+                    additional_data={'login_method': 'email_password'}
+                )
+                
                 return Response({
                     'refresh': str(refresh),
                     'access': str(refresh.access_token),
                     'user': UserSerializer(user).data
                 }, status=status.HTTP_200_OK)
             else:
+                # Log failed login due to inactive account
+                log_action(
+                    request,
+                    'LOGIN',
+                    target_user=user,
+                    additional_data={'status': 'failed', 'reason': 'account_deactivated'}
+                )
                 return Response(
                     {'error': 'Account is deactivated'}, 
                     status=status.HTTP_401_UNAUTHORIZED
                 )
         
+        # Log failed login with invalid credentials
+        log_action(
+            request,
+            'LOGIN',
+            additional_data={
+                'status': 'failed', 
+                'reason': 'invalid_credentials',
+                'attempted_email': email
+            }
+        )
         return Response(
             {'error': 'Invalid credentials'}, 
             status=status.HTTP_401_UNAUTHORIZED
@@ -136,13 +198,50 @@ class ProfileUpdateView(generics.UpdateAPIView):
     def get_object(self):
         return self.request.user
 
+    def _get_changed_fields(self, old_data, new_data):
+        """Helper to identify changed fields"""
+        changed = {}
+        for key in old_data:
+            if old_data[key] != new_data.get(key):
+                changed[key] = {
+                    'old': old_data[key],
+                    'new': new_data.get(key)
+                }
+        return changed
+
     def put(self, request, *args, **kwargs):
         """Handle PUT requests for profile updates including profile picture"""
-        return super().put(request, *args, **kwargs)
+        old_data = ProfileUpdateSerializer(self.get_object()).data
+        response = super().put(request, *args, **kwargs)
+        
+        log_action(
+            request,
+            'PROFILE_UPDATE',
+            target_user=request.user,
+            additional_data={
+                'action_type': 'full_update',
+                'changes': self._get_changed_fields(old_data, response.data)
+            }
+        )
+        
+        return response
 
     def patch(self, request, *args, **kwargs):
         """Handle PATCH requests for partial profile updates including profile picture"""
-        return super().patch(request, *args, **kwargs)
+        old_data = ProfileUpdateSerializer(self.get_object()).data
+        response = super().patch(request, *args, **kwargs)
+        
+        log_action(
+            request,
+            'PROFILE_UPDATE',
+            target_user=request.user,
+            additional_data={
+                'action_type': 'partial_update',
+                'changes': self._get_changed_fields(old_data, response.data)
+            }
+        )
+        
+        return response
 
 
 class ForgotPasswordView(APIView):
@@ -159,6 +258,13 @@ class ForgotPasswordView(APIView):
         
         try:
             user = User.objects.get(email=email)
+            
+            # Log password reset request
+            log_action(
+                request,
+                'PASSWORD_RESET_REQUEST',
+                target_user=user
+            )
             
             uid = urlsafe_base64_encode(force_bytes(user.pk))
             token = default_token_generator.make_token(user)
@@ -183,6 +289,18 @@ class ForgotPasswordView(APIView):
                 
             except Exception as e:
                 logger.error(f"Failed to send password reset email to {email}: {str(e)}")
+                
+                # Log email failure
+                log_action(
+                    request,
+                    'EMAIL_SEND_FAILURE',
+                    target_user=user,
+                    additional_data={
+                        'email_type': 'password_reset',
+                        'error': str(e)
+                    }
+                )
+                
                 return Response(
                     {"error": "Failed to send email. Please try again later."}, 
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -194,8 +312,17 @@ class ForgotPasswordView(APIView):
             )
             
         except User.DoesNotExist:
-           
+            # Log failed password reset attempt
             logger.warning(f"Password reset attempted for non-existent email: {email}")
+            log_action(
+                request,
+                'PASSWORD_RESET_REQUEST',
+                additional_data={
+                    'status': 'failed',
+                    'reason': 'user_not_found',
+                    'attempted_email': email
+                }
+            )
             return Response(
                 {"message": "If an account with this email exists, a password reset link has been sent."}, 
                 status=status.HTTP_200_OK
@@ -246,18 +373,38 @@ class ResetPasswordView(APIView):
                 user.set_password(new_password)
                 user.save()
                 
+                # Log successful password reset
+                log_action(
+                    request,
+                    'PASSWORD_RESET_COMPLETE',
+                    target_user=user
+                )
+                
                 logger.info(f"Password successfully reset for user {user.email}")
                 return Response(
                     {"message": "Password has been reset successfully."}, 
                     status=status.HTTP_200_OK
                 )
             else:
+                # Log failed password reset due to invalid token
+                log_action(
+                    request,
+                    'PASSWORD_RESET_COMPLETE',
+                    target_user=user,
+                    additional_data={'status': 'failed', 'reason': 'invalid_token'}
+                )
                 return Response(
                     {"error": "Invalid or expired reset link."}, 
                     status=status.HTTP_400_BAD_REQUEST
                 )
                 
         except (TypeError, ValueError, OverflowError, User.DoesNotExist):
+            # Log failed password reset due to invalid link
+            log_action(
+                request,
+                'PASSWORD_RESET_COMPLETE',
+                additional_data={'status': 'failed', 'reason': 'invalid_reset_link'}
+            )
             return Response(
                 {"error": "Invalid reset link."}, 
                 status=status.HTTP_400_BAD_REQUEST
@@ -276,12 +423,45 @@ class UserListView(generics.ListAPIView):
     serializer_class = UserSerializer
     permission_classes = [IsAdminOrInvestigatorOrPolice]
 
+    def get(self, request, *args, **kwargs):
+        # Log user list access
+        log_action(
+            request,
+            'USER_LIST_ACCESS',
+            additional_data={'accessed_by_role': request.user.role}
+        )
+        return super().get(request, *args, **kwargs)
+
 
 class UserDetailView(generics.RetrieveUpdateDestroyAPIView):
     """Admin view to get, update, or delete a specific user"""
     queryset = User.objects.all()
     serializer_class = UserSerializer
     permission_classes = [IsAdminOrInvestigator]
+
+    def _get_changed_fields(self, old_data, new_data):
+        """Helper to identify changed fields"""
+        changed = {}
+        for key in old_data:
+            if old_data[key] != new_data.get(key):
+                changed[key] = {
+                    'old': old_data[key],
+                    'new': new_data.get(key)
+                }
+        return changed
+
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        
+        # Log user detail access
+        log_action(
+            request,
+            'USER_DETAIL_ACCESS',
+            target_user=instance,
+            additional_data={'accessed_by': request.user.email}
+        )
+        
+        return super().retrieve(request, *args, **kwargs)
 
     def update(self, request, *args, **kwargs):
         """Handle user updates with proper logging"""
@@ -302,26 +482,29 @@ class UserDetailView(generics.RetrieveUpdateDestroyAPIView):
         serializer.is_valid(raise_exception=True)
         
         # Store original data for logging
-        original_data = {
-            'email': instance.email,
-            'role': instance.role,
-            'is_active': instance.is_active
-        }
+        original_data = UserSerializer(instance).data
         
         self.perform_update(serializer)
         
         # Log what was changed
         updated_user = serializer.instance
-        changes = []
-        if original_data['email'] != updated_user.email:
-            changes.append(f"email: {original_data['email']} -> {updated_user.email}")
-        if original_data['role'] != updated_user.role:
-            changes.append(f"role: {original_data['role']} -> {updated_user.role}")
-        if original_data['is_active'] != updated_user.is_active:
-            changes.append(f"is_active: {original_data['is_active']} -> {updated_user.is_active}")
+        changes = self._get_changed_fields(original_data, serializer.data)
+        
+        log_action(
+            request,
+            'USER_UPDATE',
+            target_user=updated_user,
+            additional_data={
+                'old_data': original_data,
+                'new_data': serializer.data,
+                'changed_fields': changes,
+                'update_type': 'partial' if partial else 'full'
+            }
+        )
         
         if changes:
-            logger.info(f"User {updated_user.email} updated by admin {request.user.email}. Changes: {', '.join(changes)}")
+            change_summary = ', '.join([f"{k}: {v['old']} -> {v['new']}" for k, v in changes.items()])
+            logger.info(f"User {updated_user.email} updated by admin {request.user.email}. Changes: {change_summary}")
         
         return Response(serializer.data)
 
@@ -340,15 +523,22 @@ class UserDetailView(generics.RetrieveUpdateDestroyAPIView):
         logger.warning(f"Admin {request.user.email} is deleting user {instance.email} (ID: {instance.id})")
         
         # Store user info before deletion for logging
-        deleted_user_email = instance.email
-        deleted_user_id = instance.id
+        user_data = UserSerializer(instance).data
+        
+        # Log the deletion
+        log_action(
+            request,
+            'USER_DELETE',
+            target_user=instance,
+            additional_data={'user_data': user_data}
+        )
         
         self.perform_destroy(instance)
         
-        logger.warning(f"User {deleted_user_email} (ID: {deleted_user_id}) successfully deleted by admin {request.user.email}")
+        logger.warning(f"User {user_data['email']} (ID: {user_data['id']}) successfully deleted by admin {request.user.email}")
         
         return Response(
-            {"message": f"User {deleted_user_email} has been successfully deleted."}, 
+            {"message": f"User {user_data['email']} has been successfully deleted."}, 
             status=status.HTTP_204_NO_CONTENT
         )
 
@@ -358,6 +548,17 @@ class AdminUserUpdateView(generics.UpdateAPIView):
     queryset = User.objects.all()
     serializer_class = UserSerializer
     permission_classes = [permissions.IsAuthenticated, IsAdmin]
+    
+    def _get_changed_fields(self, old_data, new_data):
+        """Helper to identify changed fields"""
+        changed = {}
+        for key in old_data:
+            if old_data[key] != new_data.get(key):
+                changed[key] = {
+                    'old': old_data[key],
+                    'new': new_data.get(key)
+                }
+        return changed
     
     def update(self, request, *args, **kwargs):
         """Handle user updates with validation and logging"""
@@ -371,13 +572,29 @@ class AdminUserUpdateView(generics.UpdateAPIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-       
         logger.info(f"Admin {request.user.email} updating user {instance.email}")
+        
+        # Capture old data for logging
+        old_data = UserSerializer(instance).data
         
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
         
         self.perform_update(serializer)
+        
+        # Log the update
+        changes = self._get_changed_fields(old_data, serializer.data)
+        log_action(
+            request,
+            'USER_UPDATE',
+            target_user=instance,
+            additional_data={
+                'old_data': old_data,
+                'new_data': serializer.data,
+                'changed_fields': changes,
+                'update_type': 'partial' if partial else 'full'
+            }
+        )
         
         logger.info(f"User {instance.email} successfully updated by admin {request.user.email}")
         
@@ -396,7 +613,6 @@ class AdminUserDeleteView(generics.DestroyAPIView):
         """Handle user deletion with proper safeguards"""
         instance = self.get_object()
         
-     
         if instance == request.user:
             return Response(
                 {"error": "Cannot delete your own account."}, 
@@ -413,6 +629,17 @@ class AdminUserDeleteView(generics.DestroyAPIView):
         
         logger.warning(f"Admin {request.user.email} is deleting user {instance.email} (ID: {instance.id})")
         
+        # Store user data for logging
+        user_data = UserSerializer(instance).data
+        
+        # Log the deletion
+        log_action(
+            request,
+            'USER_DELETE',
+            target_user=instance,
+            additional_data={'user_data': user_data}
+        )
+        
         deleted_user_email = instance.email
         self.perform_destroy(instance)
         
@@ -422,7 +649,6 @@ class AdminUserDeleteView(generics.DestroyAPIView):
             {"message": f"User {deleted_user_email} has been successfully deleted."}, 
             status=status.HTTP_200_OK
         )
-
 
 
 class UserActivateDeactivateView(APIView):
@@ -439,7 +665,6 @@ class UserActivateDeactivateView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
         
-   
         logger.info(f"Before toggle - User {user.email} status: {user.status}, is_active: {user.is_active}")
         
         if user == request.user:
@@ -456,17 +681,33 @@ class UserActivateDeactivateView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
         
-     
+        # Store original status for logging
         original_status = user.status
+        original_is_active = user.is_active
         
         if user.status == 'Active':
             user.deactivate()
             action = "deactivated"
+            audit_action = 'USER_DEACTIVATE'
         else:
             user.activate()
             action = "activated"
+            audit_action = 'USER_ACTIVATE'
         
         user.refresh_from_db()
+        
+        # Log the activation/deactivation
+        log_action(
+            request,
+            audit_action,
+            target_user=user,
+            additional_data={
+                'previous_status': original_status,
+                'new_status': user.status,
+                'previous_is_active': original_is_active,
+                'new_is_active': user.is_active
+            }
+        )
         
         logger.info(f"User {user.email} {action} by admin {request.user.email}")
         logger.info(f"After toggle - User {user.email} status: {user.status}, is_active: {user.is_active}")
